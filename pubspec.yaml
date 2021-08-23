@@ -1,5 +1,5 @@
 name: verbose_fetch
-description: A copycat of Javascript's Fetch API as a Dart package.
+description: This is a Dart package that heavily inspired by Javascript's Fetch API.
 version: 0.0.1
 
 environment:

@@ -14,13 +14,13 @@ dynamic _createBody(RequestBody body) {
   switch (body.type) {
     case RequestBodyType.formData:
       {
-        if (body.content is! List<FormDataFieldEntry>) {
+        if (body.content is! List<FormDataField>) {
           throw InvalidPayloadException();
         }
 
         js.FormData f = js.FormData();
-        for (var e in (body.content as List<FormDataFieldEntry>)) {
-          if (e.type == FormDataFieldType.file && e.value is Uint8List) {
+        for (var e in (body.content as List<FormDataField>)) {
+          if (e is FileField) {
             Uint8List byteList = e.value;
             js.Array byteArray = js.Array();
 
@@ -32,12 +32,10 @@ dynamic _createBody(RequestBody body) {
             js.Array array = js.Array();
             callMethod(array, 'push', [bytes]);
             var options = newObject();
-            if (e.mime != null) {
-              setProperty(options, 'type', e.mime);
+            if (e.mimeType != null) {
+              setProperty(options, 'type', e.mimeType);
             }
-            if (e.fileName != null) {
-              setProperty(options, 'filename', e.fileName);
-            }
+            setProperty(options, 'filename', e.fileName);
 
             final blob = js.Blob(array, options);
 
@@ -166,7 +164,7 @@ Future<FetchResponse> fetch(
     return await promiseToFuture(callMethod(_response, 'text', []));
   });
   setFormDataFunc(result, () async {
-    List<FormDataFieldEntry> fields = [];
+    List<FormDataField> fields = [];
     var jsFormData =
         await promiseToFuture(callMethod(_response, 'formData', []));
 
@@ -195,14 +193,14 @@ Future<FetchResponse> fetch(
           list.add(getProperty(uint8Array, i));
         }
 
-        fields.add(FormDataFieldEntry.file(
+        fields.add(FileField(
           name,
           Uint8List.fromList(list),
-          fileName: fileName,
-          mime: mime,
+          fileName,
+          mimeType: mime,
         ));
       } else {
-        fields.add(FormDataFieldEntry(name, value));
+        fields.add(NonFileField(name, value));
       }
 
       entry = callMethod(entries, 'next', []);

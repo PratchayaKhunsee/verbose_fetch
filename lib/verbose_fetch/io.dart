@@ -17,7 +17,7 @@ dynamic _createBody(RequestBody body) {
   switch (body.type) {
     case RequestBodyType.formData:
       {
-        if (body.content is! List<FormDataFieldEntry>) {
+        if (body.content is! List<FormDataField>) {
           throw InvalidPayloadException();
         }
         return body.content;
@@ -79,12 +79,13 @@ Future<FetchResponse> fetch(
       case RequestBodyType.formData:
         MultipartRequest multipartRequest = MultipartRequest(_method, uri);
 
-        for (var e in (_body as List<FormDataFieldEntry>)) {
-          if (e.type == FormDataFieldType.file) {
+        for (var e in (_body as List<FormDataField>)) {
+          if (e is FileField) {
             multipartRequest.files.add(MultipartFile.fromBytes(
               e.name,
-              (e.value as Uint8List).toList(),
-              contentType: e.mime is String ? MediaType.parse(e.mime!) : null,
+              e.value.toList(),
+              contentType:
+                  e.mimeType is String ? MediaType.parse(e.mimeType!) : null,
               filename: e.fileName,
             ));
           } else {
@@ -149,7 +150,7 @@ Future<FetchResponse> fetch(
           .replaceAll(RegExp("\"\$"), "");
 
       List<int> bodyByteList = byteList.toList();
-      List<FormDataFieldEntry> fields = [];
+      List<FormDataField> fields = [];
 
       _MultipartReadingMode phase = _MultipartReadingMode.header;
 
@@ -167,14 +168,14 @@ Future<FetchResponse> fetch(
 
       void createField() {
         if (isFile) {
-          fields.add(FormDataFieldEntry.file(
+          fields.add(FileField(
             fieldName!,
             Uint8List.fromList(content),
-            fileName: fileName,
-            mime: mime,
+            fileName ?? "",
+            mimeType: mime,
           ));
         } else {
-          fields.add(FormDataFieldEntry<String>(
+          fields.add(NonFileField(
             fieldName!,
             utf8.decode(content, allowMalformed: true),
           ));

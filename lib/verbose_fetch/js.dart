@@ -2,61 +2,83 @@
 library js;
 
 import 'package:js/js.dart';
+import 'package:js/js_util.dart';
 
-@JS('console.error')
-external void printError(msg);
+@JS()
+external dynamic window;
 
-@JS('console.log')
-external void print(msg);
-
-@JS('Object')
-class Object {
-  external static dynamic entries(obj);
+getObjectEntryIterator(obj) {
+  return callMethod(getProperty(window, 'Object'), 'entries', [obj]);
 }
 
-@JS('Array')
-class Array {
-  external static bool isArray(value);
-  external static Array from(arrayLike);
-  external int get length;
+createArray([List? member]) {
+  return callConstructor(getProperty(window, 'Array'), member ?? []);
 }
 
-@JS('Promise')
-class Promise {}
-
-@JS('Uint8Array')
-class Uint8Array {
-  external Uint8Array(length);
-  external static Uint8Array from(arrayLike);
+createArrayFrom(arrayLike) {
+  return callMethod(getProperty(window, 'Array'), 'from',
+      arrayLike != null ? [arrayLike] : []);
 }
 
-@JS('Blob')
-class Blob {
-  external Blob(array, [options]);
+removeFirstFromArray(array) {
+  if (!instanceof(array, getProperty(window, 'Array'))) return;
+  return callMethod(array, 'shift', []);
 }
 
-@JS('FormData')
-class FormData {
-  external void append(String name, value, [String? filename]);
+isArray(obj) {
+  return callMethod(getProperty(window, 'Array'), 'isArray', [obj]);
 }
 
-@JS('Headers')
-class Headers {
-  external factory Headers();
-  external void set(String name, String value);
-  external String get(String name);
+getLength(list) {
+  return getProperty(list, 'length');
 }
 
-@JS('Request')
-class Request {
-  external factory Request(
-    url, [
-    init,
-  ]);
+createUint8Array(lengthOrObject, [int? byteOffset, int? length]) {
+  var args = [lengthOrObject];
+  if (byteOffset != null) args.add(byteOffset);
+  if (length != null) args.add(length);
+  return callConstructor(getProperty(window, 'Uint8Array'), args);
 }
 
-@JS('fetch')
-external Promise fetch(
-  resource, [
-  init,
-]);
+createUint8ArrayFrom(arrayLike) {
+  return callMethod(getProperty(window, 'Uint8Array'), 'from', [arrayLike]);
+}
+
+createBlob(array, [options]) {
+  var args = [array];
+  if (options != null) args.add(options);
+  return callConstructor(getProperty(window, 'Blob'), args);
+}
+
+createFormData() {
+  return callConstructor(getProperty(window, 'FormData'), []);
+}
+
+appendFormDataField(formData, String name, value, [String? filename]) {
+  if (!instanceof(formData, getProperty(window, 'FormData'))) return;
+  var args = [name, value];
+  if (filename != null) args.add(filename);
+  callMethod(formData, 'append', args);
+}
+
+createRequest(url, [init]) {
+  var args = [url];
+  if (init != null) args.add(init);
+
+  return callConstructor(getProperty(window, 'Request'), args);
+}
+
+createHeaders() {
+  return callConstructor(getProperty(window, 'Headers'), []);
+}
+
+setHeaders(headers, String name, String value) {
+  if (!instanceof(headers, getProperty(window, 'Headers'))) return;
+  callMethod(headers, 'set', [name, value]);
+}
+
+callFetch(resource, [init]) {
+  var args = [resource];
+  if (init != null) args.add(init);
+  return callMethod(window, 'fetch', args);
+}

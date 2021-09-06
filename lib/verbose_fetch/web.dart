@@ -18,38 +18,31 @@ dynamic _createBody(RequestBody body) {
           throw InvalidPayloadException();
         }
 
-        js.FormData f = js.FormData();
+        var formData = js.createFormData();
+
         for (var e in (body.content as List<FormDataField>)) {
           if (e is FileField) {
             Uint8List byteList = e.value;
-            js.Array byteArray = js.Array();
+            var byteArray = js.createArray(byteList);
 
-            for (int b in byteList) {
-              callMethod(byteArray, 'push', [b]);
-            }
+            var bytes = js.createUint8ArrayFrom(byteArray);
 
-            js.Uint8Array bytes = js.Uint8Array.from(byteArray);
-            js.Array array = js.Array();
-            callMethod(array, 'push', [bytes]);
+            var array = js.createArray([bytes]);
             var options = newObject();
             if (e.mimeType != null) {
               setProperty(options, 'type', e.mimeType);
             }
             setProperty(options, 'filename', e.fileName);
 
-            final blob = js.Blob(array, options);
+            final blob = js.createBlob(array, options);
 
-            f.append(
-              e.name,
-              blob,
-              e.fileName,
-            );
+            js.appendFormDataField(formData, e.name, blob, e.fileName);
           } else {
-            f.append(e.name, e.value);
+            js.appendFormDataField(formData, e.name, e.value);
           }
         }
 
-        return f;
+        return formData;
       }
     case RequestBodyType.json:
       {
@@ -88,15 +81,15 @@ Future<FetchResponse> fetch(
       ? null
       : _createBody(body!);
 
-  js.Headers _headers = js.Headers();
+  var _headers = js.createHeaders();
   if (headers != null) {
     headers.forEach((name, value) {
-      _headers.set(name, value);
+      js.setHeaders(_headers, name, value);
     });
   }
 
   if (body?.type == RequestBodyType.json) {
-    _headers.set('Content-Type', 'application/json');
+    js.setHeaders(_headers, 'Content-Type', 'application/json');
   }
 
   Map<String, dynamic> initMap = {
@@ -155,9 +148,8 @@ Future<FetchResponse> fetch(
     if (value != null) setProperty(init, name, value);
   });
 
-  var _response = await promiseToFuture(js.fetch(
-    js.Request(url, init),
-  ));
+  var _response =
+      await promiseToFuture(js.callFetch(js.createRequest(url, init)));
 
   FetchResponse result = FetchResponse();
   setTextFunc(result, () async {
@@ -165,8 +157,9 @@ Future<FetchResponse> fetch(
   });
   setFormDataFunc(result, () async {
     List<FormDataField> fields = [];
-    var jsFormData =
-        await promiseToFuture(callMethod(_response, 'formData', []));
+    var jsFormData = await promiseToFuture(
+      callMethod(_response, 'formData', []),
+    );
 
     var entries = callMethod(jsFormData, 'entries', []);
     var entry = callMethod(entries, 'next', []);
@@ -183,7 +176,8 @@ Future<FetchResponse> fetch(
         var arrayBuffer = await promiseToFuture(
           callMethod(value, 'arrayBuffer', []),
         );
-        js.Uint8Array uint8Array = js.Uint8Array(arrayBuffer);
+
+        var uint8Array = js.createUint8Array(arrayBuffer);
         String fileName = getProperty(value, 'name') ?? '';
         String? mime = getProperty(value, 'type');
         int length = getProperty(arrayBuffer, 'byteLength') ?? 0;
@@ -216,38 +210,39 @@ Future<FetchResponse> fetch(
     ) {
       return v is num || v is String || v is bool || v == null
           ? v
-          : (js.Array.isArray(v)
+          : (js.isArray(v)
               ? arrayToList(v)
                   .map((_) => determineValue(_, arrayToList, objectToMap))
                   .toList()
               : objectToMap(v));
     }
 
-    List<dynamic> jsArrayToList(arr) {
-      List<dynamic> list = [];
-      js.Array a = js.Array.from(arr);
-      while (a.length > 0) {
-        list.add(callMethod(a, 'shift', []));
+    List jsArrayToList(arr) {
+      List list = [];
+      var a = js.createArrayFrom(arr);
+      while (js.getLength(a) > 0) {
+        list.add(js.removeFirstFromArray(a));
       }
+
       return list;
     }
 
     Map<String, dynamic> jsObjectToMap(obj) {
-      var entries = js.Object.entries(obj);
+      var entries = js.getObjectEntryIterator(obj);
       Map<String, dynamic> m = {};
 
-      var kV = callMethod(entries, 'shift', []);
+      var kV = js.removeFirstFromArray(entries);
       while (kV != null) {
         var key = getProperty(kV, 0);
         var value = getProperty(kV, 1);
         m["$key"] = determineValue(value, jsArrayToList, jsObjectToMap);
-        kV = callMethod(entries, 'shift', []);
+        kV = js.removeFirstFromArray(entries);
       }
       return m;
     }
 
     dynamic jsObjectToValue(obj) {
-      if (js.Array.isArray(obj)) {
+      if (js.isArray(obj)) {
         return jsArrayToList(obj)
             .map((v) => determineValue(v, jsArrayToList, jsObjectToMap))
             .toList();

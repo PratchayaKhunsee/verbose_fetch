@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart';
 import 'package:http_parser/http_parser.dart';
 
@@ -107,6 +108,10 @@ Future<FetchResponse> fetch(
 
         response = await client.send(request);
     }
+  } else {
+    Request request = Request('GET', uri);
+    if (headers != null) request.headers.addAll(headers);
+    response = await client.send(request);
   }
 
   FetchResponse result = FetchResponse();

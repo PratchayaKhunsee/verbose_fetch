@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+// import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
 import 'package:http/http.dart';
 import 'package:http_parser/http_parser.dart';
 
@@ -8,10 +10,10 @@ import '_error.dart';
 import '_enum.dart';
 import '_instance.dart';
 
-enum _MultipartReadingMode {
-  header,
-  body,
-}
+// enum _MultipartReadingMode {
+//   header,
+//   body,
+// }
 
 dynamic _createBody(RequestBody body) {
   switch (body.type) {
@@ -36,6 +38,14 @@ dynamic _createBody(RequestBody body) {
       }
   }
 }
+
+RegExp _bothLetterCase(String pattern) => RegExp(pattern.splitMapJoin(
+      RegExp("[A-Za-z]"),
+      onMatch: (p0) {
+        String c = p0.group(0) ?? "";
+        return "(${c.toLowerCase()}|${c.toUpperCase()})";
+      },
+    ));
 
 /// Do the request.
 ///
@@ -122,14 +132,6 @@ Future<FetchResponse> fetch(
     return null;
   }
 
-  RegExp letterCase(String pattern) => RegExp(pattern.splitMapJoin(
-        RegExp("[A-Za-z]"),
-        onMatch: (p0) {
-          String c = p0.group(0) ?? "";
-          return "(${c.toLowerCase()}|${c.toUpperCase()})";
-        },
-      ));
-
   setTextFunc(result, () async {
     try {
       return await response.stream.bytesToString();
@@ -138,150 +140,230 @@ Future<FetchResponse> fetch(
     }
   });
   setFormDataFunc(result, () async {
-    try {
-      Uint8List byteList = await response.stream.toBytes();
-      String? contentType =
-          getHeader(letterCase("Content-Type"), response.headers);
+    Uint8List byteList = await response.stream.toBytes();
+    String? contentType =
+        getHeader(_bothLetterCase("Content-Type"), response.headers);
 
-      if (contentType == null ||
-          !contentType.contains(
-              RegExp(r"multipart/form-data\s*;\s*boundary\s*=\s*.+"))) {
-        throw UnreadableException();
-      }
+    if (contentType == null ||
+        !contentType
+            .contains(RegExp(r"multipart/form-data\s*;\s*boundary\s*=\s*.+"))) {
+      throw UnreadableException();
+    }
 
-      String boundary = contentType
-          .split(RegExp("(boundary\\s*=\\s*(\"|))"))[1]
-          .replaceAll(RegExp("\"\$"), "");
+    String boundary = contentType
+        .split(RegExp("(boundary\\s*=\\s*(\"|))"))[1]
+        .replaceAll(RegExp("\"\$"), "");
 
-      List<int> bodyByteList = byteList.toList();
-      List<FormDataField> fields = [];
+    // ignore: constant_identifier_names
+    const int CR = 0x0d;
+    // ignore: constant_identifier_names
+    const int LF = 0x0a;
+    // ignore: constant_identifier_names
+    const int DASH = 0x2d;
+    final List<int> boundaryBytes = utf8.encode(boundary);
 
-      _MultipartReadingMode phase = _MultipartReadingMode.header;
+    /// The state of form data processing.
+    ///
+    /// 0 = On first line, next state requires the first dash character
+    /// 1 = Detect the first boundary, next state requires the followed DASH character
+    /// 2 = Read the first boundary, next state requires the READ BOUNDARY needs to be same as the HEADER BOUNDARY
+    /// 3 = Detect the end of the first boundary, next state requires the "CARTRIDGE RETURN" escape character
+    /// 4 = End of checking the first boundary, next state reqiures the followed "LINE FEED" escape character
+    /// 5 = Read the form header, next state requires the first "CARTIDGE RETURN" escape character
+    /// 6 = Detect the form header seperator, next state requires the followed "LINE FEED" escape character
+    /// 7 = Detect the form body leading, next state requires the second "CARTRIDGE RETURN" escape character
+    /// 8 = End of the form header, next state requires the followed "LINE FEDD' escape character
+    /// 9 = Read the form body, next state requires the opening "CARTRIDGE RETURN" escape character
+    /// 10 = Detect the line seperator, next state requires the followed "LINE FEED" escape character
+    /// 11 = Detect the boundary, next state requires the leading DASH character
+    /// 12 = Detect the boundary detection, next state requires the followed DASH character
+    /// 12 = End of the boundary, next state requires the READ BOUNDARY needs to be same as the HEADER BOUNDARY
+    /// 13 = Detect the last boundary or the next form field, next state requires the leading DASH character or the leading
+    /// 14 = End of form data, it requires the followed DASH character to finish the process
+    int state = 0;
+    int readBoundaryAt = 0;
+    bool lineSeperatorDetected = true;
 
-      /// The current line as a byte list.
-      List<int> currentLine = [];
-      bool isFile = false;
-      bool isFirstLine = true;
-      String? fileName;
-      String? fieldName;
-      String? mime;
-      List<int> content = [];
+    List<FormDataField> formDataFields = [];
+    List<int> formHeaderBytes = [];
+    List<int> formBodyBytes = [];
+    String? formFieldName;
+    String? formFileName;
+    String? formContentType;
 
-      bool isHeaderReadingPhase() => phase == _MultipartReadingMode.header;
-      bool isBodyReadingPhase() => phase == _MultipartReadingMode.body;
+    /* I'm going to have to create the new logic for form data processing. */
+    for (int i = 0; i < byteList.length; i++) {
+      int byte = byteList[i];
 
-      void createField() {
-        if (isFile) {
-          fields.add(FileField(
-            fieldName!,
-            Uint8List.fromList(content),
-            fileName ?? "",
-            mimeType: mime,
-          ));
-        } else {
-          fields.add(NonFileField(
-            fieldName!,
-            utf8.decode(content, allowMalformed: true),
-          ));
-        }
-      }
-
-      for (int i = 0; i < bodyByteList.length; i++) {
-        if (bodyByteList[i] == 0x0d && bodyByteList[i + 1] == 0x0a) {
-          String lineString = utf8.decode(currentLine, allowMalformed: true);
-
-          if (isFirstLine) {
-            if (lineString != "--$boundary") throw 0;
+      /// ignore: non_constant_identifier_names
+      bool EOF = false;
+      switch (state) {
+        case 0:
+        case 1:
+          if (byte != DASH) throw UnreadableException();
+          state++;
+          readBoundaryAt = i + 1;
+          break;
+        case 2:
+          if (byte != boundaryBytes[i - readBoundaryAt]) throw 0;
+          if (boundaryBytes.length - i + readBoundaryAt == 1) state++;
+          break;
+        case 3:
+          if (byte != CR) throw UnreadableException();
+          state++;
+          break;
+        case 4:
+          if (byte != LF) throw UnreadableException();
+          state++;
+          break;
+        case 5:
+          if (byte == CR) {
+            state++;
+          } else {
+            formHeaderBytes.add(byte);
           }
+          break;
+        case 6:
+          if (byte == LF) {
+            state++;
+          } else {
+            formHeaderBytes.addAll([CR, byte]);
+            state--;
+          }
+          break;
+        case 7:
+          if (byte == CR) {
+            state++;
+          } else {
+            formHeaderBytes.addAll([CR, LF, byte]);
+            state -= 2;
+          }
+          break;
+        case 8:
+          if (byte == LF) {
+            String formHeader =
+                utf8.decode(formHeaderBytes, allowMalformed: true);
 
-          // Go to form field's information reading phase.
-          else if (lineString == "--$boundary") {
-            createField();
-            phase = _MultipartReadingMode.header;
-            fileName = fieldName = mime = null;
-            isFile = false;
-            content = [];
-          }
-          // End the entire reading process, and put the remaining form field.
-          else if (lineString == "--$boundary--") {
-            createField();
-            break;
-          }
-          // Read the content from each line of payload.
-          else if (isBodyReadingPhase()) {
-            if (content.isNotEmpty) {
-              content.addAll([0x0d, 0x0a]);
-            }
-            content.addAll(currentLine);
-          }
-          // Get form field's name and file name.
-          else if (isHeaderReadingPhase() &&
-              lineString.contains(RegExp(
-                "Content-Disposition\\s*:\\s*form-data.+?name\\s*=\\s*\".*\"",
-              ))) {
-            List<String> n = lineString.split(
+            List<String> n = formHeader.split(
               RegExp("Content-Disposition\\s*:.+?name\\s*=\\s*\""),
             );
 
-            List<String> fn = lineString.split(
+            List<String> fn = formHeader.split(
               RegExp("Content-Disposition\\s*:.+?filename\\s*=\\s*\""),
             );
 
-            if (n.length < 2) throw 0;
+            List<String> m = formHeader.split(
+              RegExp("${_bothLetterCase("Content-Type").pattern}\\s*:\\s*"),
+            );
 
-            fieldName = n[1].replaceAll(RegExp("\"*\$"), "");
+            if (n.length < 2) throw UnreadableException();
 
-            fileName =
-                fn.length < 2 ? null : fn[1].replaceAll(RegExp("\"*\$"), "");
+            formFieldName = n[1].replaceAll(RegExp("\"(.|\\s)*\$"), "");
+
+            formFileName = fn.length < 2
+                ? null
+                : fn[1].replaceAll(RegExp("\"(.|\\s)*\$"), "");
+            formContentType =
+                m.length < 2 ? null : m[1].split(RegExp("((\r|)\n|\\s*;)"))[0];
+
+            formHeaderBytes = [];
+
+            state++;
+          } else {
+            formHeaderBytes.addAll([CR, LF, CR, byte]);
+            state -= 3;
           }
-          // Find form field mime type and determine this current form field is file form field.
-          else if (isHeaderReadingPhase() &&
-              lineString.contains(RegExp("Content-Type\\s*:.+"))) {
-            List<String> m = lineString.split(RegExp("Content-Type\\s*:\\s*"));
-            if (m.length > 1) {
-              List<String> h = m[1].split(RegExp("\\/"));
-
-              if (m.length < 2) continue;
-              String front = h[0];
-              String back = h[1];
-              for (var i = 0; i < back.length; i++) {
-                if (!back[i].contains(RegExp("([A-Za-z]|-)"))) {
-                  back = back.substring(0, i + 1);
-                  continue;
-                }
-              }
-
-              mime = "$front/$back";
-              isFile = front.isNotEmpty &&
-                  front.isNotEmpty &&
-                  fileName != null &&
-                  fileName.isNotEmpty;
+          break;
+        case 9:
+          if (byte == CR) {
+            state++;
+          } else {
+            formBodyBytes.add(byte);
+          }
+          break;
+        case 10:
+          if (byte == LF) {
+            state++;
+          } else {
+            state--;
+            formBodyBytes.addAll([CR, byte]);
+          }
+          break;
+        case 11:
+          if (byte == DASH) {
+            state++;
+          } else {
+            state -= 2;
+            formBodyBytes.addAll([CR, LF, byte]);
+          }
+          break;
+        case 12:
+          if (byte == DASH) {
+            state++;
+            readBoundaryAt = i + 1;
+          } else {
+            state -= 3;
+            formBodyBytes.addAll([CR, LF, DASH, byte]);
+          }
+          break;
+        case 13:
+          if (byte != boundaryBytes[i - readBoundaryAt]) {
+            state -= 4;
+            formBodyBytes.addAll([CR, LF, DASH, DASH]);
+            for (int c = readBoundaryAt; c <= i; c++) {
+              formBodyBytes.add(byteList[c]);
             }
-          } else if (isHeaderReadingPhase() && lineString.isEmpty) {
-            phase = _MultipartReadingMode.body;
-
-            if (fieldName == null) {
-              throw 1;
-            }
+            break;
           }
 
-          isFirstLine = false;
-          i++;
-          currentLine = [];
-          continue;
-        } else {
-          currentLine.add(bodyByteList[i]);
-        }
+          if (boundaryBytes.length - i + readBoundaryAt == 1) state++;
+          break;
+        case 14:
+          if (byte == DASH) {
+            state++;
+          } else if (byte == CR) {
+            state++;
+            lineSeperatorDetected = true;
+          }
+          break;
+        case 15:
+          if (byte == DASH) {
+            EOF = true;
+          } else if (byte == LF && lineSeperatorDetected) {
+            lineSeperatorDetected = false;
+            state -= 10;
+          } else {
+            throw UnreadableException();
+          }
+
+          if (formContentType != null) {
+            formDataFields.add(FileField(
+              formFieldName!,
+              Uint8List.fromList(formBodyBytes),
+              formFileName ?? "",
+              mimeType: formContentType,
+            ));
+          } else {
+            formDataFields.add(NonFileField(
+              formFieldName!,
+              utf8.decode(formBodyBytes),
+            ));
+          }
+          formFieldName = null;
+          formFileName = null;
+          formBodyBytes = [];
+          formHeaderBytes = [];
+          break;
       }
 
-      return fields;
-    } catch (e) {
-      throw UnreadableException();
+      if (EOF) break;
     }
+
+    return formDataFields;
   });
   setJsonFunc(result, () async {
     String? contentType = getHeader(
-      letterCase("Content-Type"),
+      _bothLetterCase("Content-Type"),
       response.headers,
     );
     if (contentType == null ||
